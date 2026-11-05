@@ -60,6 +60,12 @@
       text-align: center;
     }
 
+    .card-link {
+      margin: -20px 0 30px;
+      color: var(--blue);
+      font: 700 1rem Arial, sans-serif;
+    }
+
     .number-stage {
       width: min(100%, 660px);
       display: grid;
@@ -81,6 +87,11 @@
     }
 
     .number-box.is-empty { color: #c8beb1; }
+    .number-box.is-hit {
+      border-color: var(--accent);
+      background: #f9dfd6;
+      color: var(--accent-dark);
+    }
 
     .controls {
       width: min(100%, 660px);
@@ -103,8 +114,9 @@
     button:hover { filter: brightness(1.06); transform: translateY(-2px); }
     button:active { transform: translateY(0); }
     button:disabled { cursor: wait; filter: grayscale(0.35); opacity: 0.65; }
-    #draw-once { grid-column: 1; background: var(--accent); }
-    #draw-three { grid-column: 3; background: var(--blue); }
+    #draw-once { background: var(--accent); }
+    #reset-draws { background: #68717b; }
+    #draw-three { background: var(--blue); }
 
     .status {
       min-height: 24px;
@@ -115,6 +127,20 @@
     }
 
     .status.error { color: var(--accent-dark); }
+
+    .history {
+      width: min(100%, 660px);
+      margin-top: 20px;
+      padding: 18px 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      font: 0.9rem/1.6 Arial, sans-serif;
+    }
+
+    .history h2 { margin: 0 0 8px; font-size: 1rem; }
+    .history-list { margin: 0; padding-left: 1.5rem; }
+    .history-empty { margin: 0; color: var(--muted); }
 
     @media (max-width: 560px) {
       main { width: min(100% - 28px, 420px); padding: 32px 0; }
@@ -130,29 +156,53 @@
   <main>
     <p class="eyebrow">Advent Number Draw</p>
     <h1>数字をひく</h1>
-    <p class="description">まだ出ていない数字を、1から20の中から選びます。</p>
-
-    <section class="number-stage" aria-label="抽選結果">
-      <div class="number-box is-empty" id="number-left">-</div>
-      <div class="number-box is-empty" id="number-center">-</div>
-      <div class="number-box is-empty" id="number-right">-</div>
-    </section>
+    <p class="description">1から20の数字を抽選して、記録と履歴を確認できます。</p>
+    <a class="card-link" href="/bingo">専用のビンゴカードを表示する</a>
 
     <section class="controls" aria-label="抽選ボタン">
-      <button id="draw-once" type="button">1回回す</button>
-      <button id="draw-three" type="button">3回回す</button>
+      <button id="draw-once" type="button" disabled>1回回す</button>
+      <button id="reset-draws" type="button" disabled>リセット</button>
+      <button id="draw-three" type="button" disabled>3回回す</button>
     </section>
     <p class="status" id="status" aria-live="polite">抽選回数を選んでください。</p>
+    <section class="history" aria-labelledby="history-title">
+      <h2 id="history-title">抽選履歴（advent.db）</h2>
+      <div id="history-content" aria-live="polite">履歴を読み込んでいます...</div>
+    </section>
   </main>
 
   <script>
-    const boxes = [
-      document.querySelector("#number-left"),
-      document.querySelector("#number-center"),
-      document.querySelector("#number-right"),
-    ];
     const buttons = [...document.querySelectorAll("button")];
     const status = document.querySelector("#status");
+
+    async function refreshHistory() {
+      try {
+        const response = await fetch("/api/history");
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+
+        const content = document.querySelector("#history-content");
+        content.replaceChildren();
+        if (result.history.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "history-empty";
+          empty.textContent = "まだ抽選履歴はありません。";
+          content.append(empty);
+          return;
+        }
+
+        const list = document.createElement("ol");
+        list.className = "history-list";
+        result.history.forEach(({ number, drawn_at }) => {
+          const item = document.createElement("li");
+          item.textContent = `${number}（${drawn_at}）`;
+          list.append(item);
+        });
+        content.append(list);
+      } catch (error) {
+        document.querySelector("#history-content").textContent = `履歴を取得できませんでした: ${error.message}`;
+      }
+    }
 
     async function draw(count) {
       buttons.forEach((button) => { button.disabled = true; });
@@ -164,15 +214,34 @@
         const result = await response.json();
         if (!response.ok) throw new Error(result.error);
 
-        boxes.forEach((box) => {
-          box.textContent = "-";
-          box.classList.add("is-empty");
+        status.textContent = `抽選結果: ${result.numbers.join("、")}`;
+        await refreshHistory();
+      } catch (error) {
+        status.className = "status error";
+        status.textContent = error.message;
+      } finally {
+        buttons.forEach((button) => { button.disabled = false; });
+      }
+    }
+
+    async function resetDraws() {
+      const token = window.prompt("管理者リセットトークンを入力してください。");
+      if (!token) return;
+
+      buttons.forEach((button) => { button.disabled = true; });
+      status.className = "status";
+      status.textContent = "抽選結果をリセットしています...";
+
+      try {
+        const response = await fetch("/api/reset", {
+          method: "POST",
+          headers: { "X-Reset-Token": token },
         });
-        result.numbers.forEach((number, index) => {
-          boxes[index].textContent = number;
-          boxes[index].classList.remove("is-empty");
-        });
-        status.textContent = `${count}個の数字を記録しました。`;
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+
+        status.textContent = "抽選結果をリセットしました。ビンゴカードは保持されます。";
+        await refreshHistory();
       } catch (error) {
         status.className = "status error";
         status.textContent = error.message;
@@ -183,6 +252,9 @@
 
     document.querySelector("#draw-once").addEventListener("click", () => draw(1));
     document.querySelector("#draw-three").addEventListener("click", () => draw(3));
+    document.querySelector("#reset-draws").addEventListener("click", resetDraws);
+    refreshHistory();
+    buttons.forEach((button) => { button.disabled = false; });
   </script>
 </body>
 </html>
