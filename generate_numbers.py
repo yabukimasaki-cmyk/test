@@ -52,7 +52,8 @@ def main():
         )
 
         if args.reset:
-            connection.execute("DELETE FROM advent")
+            deleted_count = connection.execute("DELETE FROM advent").rowcount
+            print(deleted_count)
             return
 
         if args.history:

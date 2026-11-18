@@ -108,7 +108,12 @@ async function getBingoCard(visitorId) {
 }
 
 async function resetDraws() {
-  await runPython(["--reset"], "抽選結果のリセットに失敗しました。");
+  const output = await runPython(["--reset"], "抽選結果のリセットに失敗しました。");
+  const deletedCount = Number(output);
+  if (!Number.isInteger(deletedCount) || deletedCount < 0) {
+    throw new Error(`抽選結果のリセット件数が不正です: ${output}`);
+  }
+  return deletedCount;
 }
 
 async function getDrawHistory() {
@@ -390,7 +395,10 @@ const server = http.createServer((request, response) => {
     }
 
     resetDraws()
-      .then(() => sendJson(response, 200, { ok: true }))
+      .then((deletedCount) => {
+        console.info(`[reset] success deleted=${deletedCount}`);
+        sendJson(response, 200, { ok: true, deletedCount });
+      })
       .catch((error) => sendFailure(response, "抽選結果のリセットに失敗しました。", error));
     return;
   }
