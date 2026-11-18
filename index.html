@@ -141,8 +141,6 @@
     .history h2 { margin: 0 0 8px; font-size: 1rem; }
     .history-list { margin: 0; padding-left: 1.5rem; }
     .history-empty { margin: 0; color: var(--muted); }
-    .admin-controls { margin-top: 12px; }
-
     @media (max-width: 560px) {
       main { width: min(100% - 28px, 420px); padding: 32px 0; }
       .description { margin-bottom: 28px; }
@@ -164,10 +162,6 @@
       <button id="draw-once" type="button" disabled>1回回す</button>
       <button id="reset-draws" type="button" disabled>リセット</button>
       <button id="draw-three" type="button" disabled>3回回す</button>
-    </section>
-    <section class="controls admin-controls" aria-label="管理者操作">
-      <button id="admin-login" type="button" disabled>管理者ログイン</button>
-      <button id="admin-logout" type="button" hidden disabled>ログアウト</button>
     </section>
     <p class="status" id="status" aria-live="polite">抽選回数を選んでください。</p>
     <section class="history" aria-labelledby="history-title">
@@ -209,16 +203,6 @@
       }
     }
 
-    async function refreshAdminSession() {
-      const response = await fetch("/api/admin/session");
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
-
-      document.querySelector("#admin-login").hidden = result.authenticated;
-      document.querySelector("#admin-logout").hidden = !result.authenticated;
-      return result.authenticated;
-    }
-
     async function draw(count) {
       buttons.forEach((button) => { button.disabled = true; });
       status.className = "status";
@@ -229,57 +213,10 @@
         const result = await response.json();
         if (!response.ok) throw new Error(result.error);
 
-        status.textContent = `抽選結果: ${result.numbers.join("、")}`;
+        status.textContent = result.numbers.length
+          ? `抽選結果: ${result.numbers.join("、")}`
+          : "すべての数字を抽選済みです";
         await refreshHistory();
-      } catch (error) {
-        status.className = "status error";
-        status.textContent = error.message;
-      } finally {
-        buttons.forEach((button) => { button.disabled = false; });
-      }
-    }
-
-    async function loginAdmin() {
-      let token = window.prompt("管理者リセットトークンを入力してログインしてください。");
-      if (!token) return;
-
-      buttons.forEach((button) => { button.disabled = true; });
-      status.className = "status";
-      status.textContent = "管理者ログイン中...";
-
-      try {
-        const response = await fetch("/api/admin/login", {
-          method: "POST",
-          headers: { "X-Reset-Token": token },
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error);
-
-        if (!await refreshAdminSession()) {
-          throw new Error("管理者セッションを確認できませんでした。");
-        }
-        status.textContent = "管理者としてログインしました。";
-      } catch (error) {
-        status.className = "status error";
-        status.textContent = error.message;
-      } finally {
-        token = "";
-        buttons.forEach((button) => { button.disabled = false; });
-      }
-    }
-
-    async function logoutAdmin() {
-      buttons.forEach((button) => { button.disabled = true; });
-      try {
-        const response = await fetch("/api/admin/logout", { method: "POST" });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error);
-
-        if (await refreshAdminSession()) {
-          throw new Error("管理者セッションを終了できませんでした。");
-        }
-        status.className = "status";
-        status.textContent = "管理者からログアウトしました。";
       } catch (error) {
         status.className = "status error";
         status.textContent = error.message;
@@ -300,12 +237,7 @@
           method: "POST",
         });
         const result = await response.json();
-        if (!response.ok) {
-          const message = response.status === 403
-            ? "リセットするには、先に管理者ログインしてください。"
-            : result.error;
-          throw new Error(message);
-        }
+        if (!response.ok) throw new Error(result.error);
 
         status.textContent = "抽選結果をリセットしました。ビンゴカードは保持されます。";
         await refreshHistory();
@@ -320,16 +252,7 @@
     document.querySelector("#draw-once").addEventListener("click", () => draw(1));
     document.querySelector("#draw-three").addEventListener("click", () => draw(3));
     document.querySelector("#reset-draws").addEventListener("click", resetDraws);
-    document.querySelector("#admin-login").addEventListener("click", loginAdmin);
-    document.querySelector("#admin-logout").addEventListener("click", logoutAdmin);
-    Promise.all([
-      refreshHistory(),
-      refreshAdminSession().catch((error) => {
-        status.className = "status error";
-        status.textContent = `管理者状態を確認できませんでした: ${error.message}`;
-      }),
-    ])
-      .finally(() => buttons.forEach((button) => { button.disabled = false; }));
+    refreshHistory().finally(() => buttons.forEach((button) => { button.disabled = false; }));
   </script>
 </body>
 </html>

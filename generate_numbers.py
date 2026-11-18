@@ -32,7 +32,7 @@ def main():
         os.environ.get("ADVENT_DB_PATH", Path(__file__).with_name("advent.db"))
     )
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(database_path) as connection:
+    with sqlite3.connect(database_path, timeout=10) as connection:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS advent (
@@ -52,6 +52,7 @@ def main():
         )
 
         if args.reset:
+            connection.execute("BEGIN IMMEDIATE")
             deleted_count = connection.execute("DELETE FROM advent").rowcount
             print(deleted_count)
             return
@@ -95,19 +96,20 @@ def main():
             return
 
         draw_count = args.count or 1
+        connection.execute("BEGIN IMMEDIATE")
         drawn_numbers = {
             row[0] for row in connection.execute("SELECT number FROM advent")
         }
         available_numbers = set(range(1, 21)) - drawn_numbers
 
-        if len(available_numbers) < draw_count:
-            raise RuntimeError(f"残りの数字が{draw_count}個未満のため、抽選できません。")
-
-        numbers = random.sample(tuple(available_numbers), draw_count)
-        connection.executemany(
-            "INSERT INTO advent (number) VALUES (?)",
-            ((number,) for number in numbers),
+        numbers = random.sample(
+            tuple(available_numbers), min(draw_count, len(available_numbers))
         )
+        if numbers:
+            connection.executemany(
+                "INSERT INTO advent (number) VALUES (?)",
+                ((number,) for number in numbers),
+            )
 
     for number in numbers:
         print(number)

@@ -1,7 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { randomBytes, randomUUID, timingSafeEqual } = require("crypto");
+const { randomUUID } = require("crypto");
 const { execFile } = require("child_process");
 
 const host = "0.0.0.0";
@@ -11,23 +11,16 @@ const pythonPath =
 const scriptPath = path.join(__dirname, "generate_numbers.py");
 const pagePath = path.join(__dirname, "index.html");
 const bingoPagePath = path.join(__dirname, "bingo.html");
-const resetToken = process.env.RESET_TOKEN;
 const trustProxy = process.env.TRUST_PROXY === "true";
 const secureCookies =
   process.env.COOKIE_SECURE === "true" ||
   (process.env.COOKIE_SECURE !== "false" && process.env.NODE_ENV === "production");
 const rateLimits = new Map();
-const adminSessions = new Map();
 const rateLimitWindowMs = 60_000;
-const adminSessionLifetimeMs = 30 * 60_000;
 
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error("PORT must be an integer between 1 and 65535.");
 }
-if (resetToken && Buffer.byteLength(resetToken) < 32) {
-  throw new Error("RESET_TOKEN must be at least 32 bytes long.");
-}
-
 function runPython(args, operation) {
   const pythonArgs = [scriptPath, ...args];
   return new Promise((resolve, reject) => {
@@ -158,39 +151,8 @@ const cleanupRateLimits = setInterval(() => {
   for (const [key, bucket] of rateLimits) {
     if (now - bucket.startedAt >= rateLimitWindowMs) rateLimits.delete(key);
   }
-  for (const [sessionId, expiresAt] of adminSessions) {
-    if (expiresAt <= now) adminSessions.delete(sessionId);
-  }
 }, rateLimitWindowMs);
 cleanupRateLimits.unref();
-
-function isValidResetToken(candidate) {
-  if (!resetToken || typeof candidate !== "string") return false;
-  const expected = Buffer.from(resetToken);
-  const provided = Buffer.from(candidate);
-  return expected.length === provided.length && timingSafeEqual(expected, provided);
-}
-
-function getAdminSessionId(request) {
-  const cookieHeader = request.headers.cookie || "";
-  const cookie = cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("admin_session="));
-  const sessionId = cookie?.slice("admin_session=".length);
-  return sessionId && /^[0-9a-f]{64}$/.test(sessionId) ? sessionId : null;
-}
-
-function hasAdminSession(request) {
-  const sessionId = getAdminSessionId(request);
-  if (!sessionId) return false;
-  const expiresAt = adminSessions.get(sessionId);
-  if (!expiresAt || expiresAt <= Date.now()) {
-    adminSessions.delete(sessionId);
-    return false;
-  }
-  return true;
-}
 
 function isSameOriginRequest(request) {
   const origin = request.headers.origin;
@@ -213,17 +175,6 @@ function isSameOriginRequest(request) {
   } catch {
     return false;
   }
-}
-
-function adminSessionCookie(sessionId, maxAge) {
-  return [
-    `admin_session=${sessionId}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Strict",
-    `Max-Age=${maxAge}`,
-    ...(secureCookies ? ["Secure"] : []),
-  ].join("; ");
 }
 
 function sendJson(response, statusCode, payload, headers = {}) {
@@ -280,52 +231,6 @@ const server = http.createServer((request, response) => {
     return;
   }
 
-  if (request.method === "GET" && requestUrl.pathname === "/api/admin/session") {
-    sendJson(response, 200, { authenticated: hasAdminSession(request) });
-    return;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/admin/login") {
-    if (isRateLimited(request, "admin-login", 5)) {
-      sendJson(response, 429, { error: "ログイン試行が多すぎます。しばらくしてから再試行してください。" });
-      return;
-    }
-    if (!resetToken) {
-      sendJson(response, 503, { error: "管理者リセットはサーバーで設定されていません。" });
-      return;
-    }
-    if (!isValidResetToken(request.headers["x-reset-token"])) {
-      sendJson(response, 403, { error: "管理者トークンが正しくありません。" });
-      return;
-    }
-
-    const sessionId = randomBytes(32).toString("hex");
-    adminSessions.set(sessionId, Date.now() + adminSessionLifetimeMs);
-    sendJson(
-      response,
-      200,
-      { ok: true },
-      { "Set-Cookie": adminSessionCookie(sessionId, adminSessionLifetimeMs / 1000) },
-    );
-    return;
-  }
-
-  if (request.method === "POST" && requestUrl.pathname === "/api/admin/logout") {
-    if (!isSameOriginRequest(request)) {
-      sendJson(response, 403, { error: "同一オリジンからの操作が必要です。" });
-      return;
-    }
-    const sessionId = getAdminSessionId(request);
-    if (sessionId) adminSessions.delete(sessionId);
-    sendJson(
-      response,
-      200,
-      { ok: true },
-      { "Set-Cookie": adminSessionCookie("", 0) },
-    );
-    return;
-  }
-
   if (request.method === "GET" && requestUrl.pathname === "/api/card") {
     if (isRateLimited(request, "card", 20)) {
       sendJson(response, 429, { error: "アクセスが多すぎます。しばらくしてから再試行してください。" });
@@ -377,16 +282,8 @@ const server = http.createServer((request, response) => {
   }
 
   if (request.method === "POST" && requestUrl.pathname === "/api/reset") {
-    if (!resetToken) {
-      sendJson(response, 503, { error: "管理者リセットはサーバーで設定されていません。" });
-      return;
-    }
     if (!isSameOriginRequest(request)) {
       sendJson(response, 403, { error: "同一オリジンからの操作が必要です。" });
-      return;
-    }
-    if (!hasAdminSession(request)) {
-      sendJson(response, 403, { error: "リセット権限がありません。" });
       return;
     }
     if (isRateLimited(request, "reset", 10)) {
